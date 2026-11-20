@@ -2,6 +2,13 @@
 
 邮百工（北邮）模型网关的 magpie / OpenCode 供应商插件：**学号密码直登，不打开浏览器**，顺带显示套餐和余额。
 
+> **使用范围：仅限北京邮电大学（BUPT）在校师生。**
+> 这个插件只是把学校的网关接到 magpie 上，本身不提供任何模型或额度。
+> 登录用的是北邮统一身份认证（`auth.bupt.edu.cn`）的学号 + 密码，
+> 账号和额度都由学校 / 邮百工平台发放，**非北邮学生无法使用**。
+> 少数院系用的「校园账号」是邮百工团队或任课教师单独开的号，走 `POST /login`，
+> 与统一认证不通用（插件会自动先试统一认证，失败再试这条路）。
+
 ```
 magpie plugin add ./opencode-baigong-auth   # 或者 magpie plugin add opencode-baigong-auth（已发布时）
 magpie plugin login baigong                 # 问学号、密码（掩码），HTTP 直连统一认证
@@ -13,6 +20,9 @@ magpie quota                                # 免费体验版 · 余额 · 套�
 登录后这一行会显示身份、套餐、余额卡；`magpie quota` / 额度页看到的是同一份数据。
 
 ## 登录怎么走的（无浏览器）
+
+只有北邮的账号走得通：统一认证地址写死为 `https://auth.bupt.edu.cn`，service 指向邮百工的
+`/edugate/api/cas-callback`。
 
 ```
 ① POST {edugate}/local-auth/start                 PKCE(S256) → request_id
