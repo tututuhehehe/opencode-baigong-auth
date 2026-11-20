@@ -40,7 +40,8 @@ const MAX_OUTPUT_TOKENS = 32_768;
 const ACCESS_FALLBACK_MS = 2 * 60 * 60_000;
 /** 静默重登的冷却：密码错了就别每个刷新周期都去打一次统一认证（会被风控/锁号）。 */
 const RELOGIN_COOLDOWN_MS = 10 * 60_000;
-let lastReloginAt = 0;
+/** 每个账号各自的冷却：多账号时一个账号重登不该挡住另一个。 */
+const lastReloginAt = new Map();
 
 // ---------------------------------------------------------------- 小工具
 
@@ -52,8 +53,8 @@ const THINKING_VARIANTS = { low: {}, high: {}, xhigh: {}, max: {} };
 
 /** 北京时间高峰：08:30–24:00 与 00:00–00:30；谷时 00:30–08:30 不打折。 */
 const PEAK_WINDOWS = [
-	{ days: [], start: "08:30", end: "24:00", rate: 2 },
-	{ days: [], start: "00:00", end: "00:30", rate: 2 },
+	{ days: [0, 1, 2, 3, 4, 5, 6], start: "08:30", end: "23:59", rate: 2 },
+	{ days: [0, 1, 2, 3, 4, 5, 6], start: "00:00", end: "00:30", rate: 2 },
 ];
 
 function b64url(buffer) {
@@ -103,6 +104,22 @@ function parseExpiry(value, fallbackMs) {
 		if (Number.isFinite(parsed)) return parsed;
 	}
 	return Date.now() + fallbackMs;
+}
+
+/** 只认真的数字：null / "" / false 都当「不知道」，别把健康账号算成额度用尽。 */
+function num(value) {
+	return typeof value === "number" && Number.isFinite(value) ? value : Number.NaN;
+}
+
+/** 让一段非可中断的登录在用户取消时立刻返回（底下的请求还会跑完，但界面不等它）。 */
+function abortable(promise, signal) {
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.reject(new Error("登录已取消。"));
+	return new Promise((resolve, reject) => {
+		const onAbort = () => reject(new Error("登录已取消。"));
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+	});
 }
 
 function maskUsername(username) {
@@ -376,7 +393,11 @@ async function followToToken(start, from, jar) {
 	for (let hop = 0; hop < 10 && next !== undefined; hop++) {
 		const absolute = new URL(next, current).href;
 		const params = successParams(absolute);
-		if (params !== undefined) return params;
+		if (params !== undefined) {
+			// 成功页本身也拉一次：站点在这里种 session cookie，下一步 complete 可能要它
+			await casRequest(absolute, {}, jar).catch(() => undefined);
+			return params;
+		}
 		const response = await casRequest(absolute, {}, jar);
 		if (response.location === undefined) {
 			throw new Error(`北邮统一认证没有回到站点（HTTP ${response.status}）。`);
@@ -388,7 +409,7 @@ async function followToToken(start, from, jar) {
 }
 
 /** 北邮统一认证（CAS）。返回令牌 + 运行配置。 */
-async function casLogin(username, password, onProgress) {
+async function casLogin(username, password, onProgress, deviceName) {
 	const pkce = createPkce();
 	const redirectUri = await loopbackRedirectUri();
 	const jar = new CookieJar();
@@ -396,7 +417,7 @@ async function casLogin(username, password, onProgress) {
 	const loginUrl = `${CAS_URL}/authserver/login?service=${encodeURIComponent(service)}`;
 
 	onProgress?.(`正在用学号 ${maskUsername(username)} 登录北邮统一认证（不打开浏览器）…`);
-	const requestId = await startLocalAuth(pkce, redirectUri, "magpie");
+	const requestId = await startLocalAuth(pkce, redirectUri, deviceName);
 
 	const page = await casRequest(loginUrl, {}, jar);
 	if (!page.ok) throw new Error(`北邮统一认证页面打不开：HTTP ${page.status}`);
@@ -446,12 +467,12 @@ async function casLogin(username, password, onProgress) {
 }
 
 /** 平台自建账号（登录页的「校园账号登录」）。 */
-async function platformLogin(username, password, onProgress) {
+async function platformLogin(username, password, onProgress, deviceName) {
 	const pkce = createPkce();
 	const redirectUri = await loopbackRedirectUri();
 
 	onProgress?.(`正在用学号 ${maskUsername(username)} 登录校园账号（不打开浏览器）…`);
-	const requestId = await startLocalAuth(pkce, redirectUri, "magpie");
+	const requestId = await startLocalAuth(pkce, redirectUri, deviceName);
 
 	const response = await fetch(`${EDUGATE}/login`, {
 		method: "POST",
@@ -479,16 +500,21 @@ async function platformLogin(username, password, onProgress) {
  * 两条路自动选：北邮统一认证优先，失败再试平台账号（两者凭据不通用）。
  * 两条都失败时，把两条的原因一起抛出来，免得只看到一半。
  */
-async function loginAny(username, password, onProgress) {
-	try {
-		return await casLogin(username, password, onProgress);
-	} catch (casError) {
+async function loginAny(username, password, onProgress, prefer) {
+	// 上次哪条路成功就先走哪条：平台账号不必每次先撞一次统一认证
+	const order = prefer === "platform" ? ["platform", "bupt_cas"] : ["bupt_cas", "platform"];
+	let first;
+	for (const route of order) {
 		try {
-			return await platformLogin(username, password, onProgress);
-		} catch (platformError) {
-			throw new Error(`${casError.message}；校园账号登录也不行：${platformError.message}`);
+			return route === "bupt_cas"
+				? await casLogin(username, password, onProgress)
+				: await platformLogin(username, password, onProgress);
+		} catch (error) {
+			if (first === undefined) first = error;
+			else throw new Error(`${first.message}；校园账号登录也不行：${error.message}`);
 		}
 	}
+	throw first;
 }
 
 // ---------------------------------------------------------------- 请求改写
@@ -605,9 +631,7 @@ async function baigongPlugin(input) {
 					async authorize(inputs) {
 						const username = String(inputs?.username ?? options.username ?? "").trim();
 						const password = String(inputs?.password ?? options.password ?? "");
-						if (username === "" || password === "") {
-							return { type: "failed", error: "需要学号和密码。" };
-						}
+						if (username === "" || password === "") throw new Error("需要学号和密码。");
 						return {
 							url: "",
 							instructions: `用学号 ${maskUsername(username)} 直连北邮统一认证，不需要浏览器…`,
@@ -678,17 +702,21 @@ async function baigongPlugin(input) {
 					if (typeof auth.username !== "string" || typeof auth.password !== "string") {
 						throw rejected(error);
 					}
-					const since = Date.now() - lastReloginAt;
-					if (lastReloginAt !== 0 && since < RELOGIN_COOLDOWN_MS) {
+					// 网络抖动、超时、5xx 不是「登录失效」：不要拿密码去打统一认证
+					const message = String(error?.message ?? error);
+					if (!/HTTP (400|401|403|422)/.test(message)) throw rejected(new Error(message));
+					const reloginKey = String(auth.accountId ?? auth.username ?? "");
+					const since = Date.now() - (lastReloginAt.get(reloginKey) ?? 0);
+					if (lastReloginAt.has(reloginKey) && since < RELOGIN_COOLDOWN_MS) {
 						throw rejected(
 							new Error(
 								`${String(error?.message ?? error)}；${Math.ceil((RELOGIN_COOLDOWN_MS - since) / 60_000)} 分钟内已自动重登过，先不重试`,
 							),
 						);
 					}
-					lastReloginAt = Date.now();
+					lastReloginAt.set(reloginKey, Date.now());
 					try {
-						const again = await loginAny(auth.username, auth.password);
+						const again = await loginAny(auth.username, auth.password, undefined, auth.loginProvider);
 						return {
 							access: again.access,
 							refresh: again.refresh,
@@ -696,6 +724,10 @@ async function baigongPlugin(input) {
 							apiKey: again.apiKey,
 							apiBase: again.apiBase,
 							identity: again.identity ?? auth.identity,
+							loginProvider: again.loginProvider ?? auth.loginProvider,
+							// magpie 合并返回字段；万一它整条替换，这两个也不能丢
+							username: auth.username,
+							password: auth.password,
 						};
 					} catch (relogin) {
 						throw rejected(new Error(`${String(error?.message ?? error)}；用存下的学号密码重登也失败：${String(relogin?.message ?? relogin)}`));
@@ -715,12 +747,18 @@ async function baigongPlugin(input) {
 			// 余额 / 额度：magpie 的账号卡片、额度环、余额卡、magpie quota 都读这里
 			async usage(getAuth) {
 				const auth = await getAuth();
-				const response = await fetch(`${EDUGATE}/local-auth/token-usage`, {
-					headers: { Authorization: `Bearer ${auth?.access}` },
-					cache: "no-store",
-					signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-				});
-				const payload = await readJson(response);
+				let response;
+				let payload;
+				try {
+					response = await fetch(`${EDUGATE}/local-auth/token-usage`, {
+						headers: { Authorization: `Bearer ${auth?.access}` },
+						cache: "no-store",
+						signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+					});
+					payload = await readJson(response);
+				} catch (error) {
+					return { error: `额度查询失败：${String(error?.message ?? error)}`, windows: [] };
+				}
 				if (!response.ok) {
 					const expired = response.status === 401 || response.status === 403;
 					return {
@@ -730,8 +768,8 @@ async function baigongPlugin(input) {
 					};
 				}
 				const data = payload?.data ?? {};
-				const grant = Number(data.tokenGrant);
-				const balance = Number(data.tokenBalance);
+				const grant = num(data.tokenGrant);
+				const balance = num(data.tokenBalance);
 				const windows = [];
 				if (Number.isFinite(grant) && grant > 0 && Number.isFinite(balance)) {
 					const used = Math.max(0, grant - balance);
@@ -817,13 +855,29 @@ async function baigongPlugin(input) {
 				};
 				for (const entry of runtime.models) {
 					if (list[entry.id] !== undefined) continue;
+					const context = num(entry.context) || num(entry.limit?.context);
+					const output = num(entry.output) || num(entry.limit?.output);
 					list[entry.id] = {
 						...(template ?? {}),
 						id: entry.id,
 						name: entry.name ?? entry.id,
-						// 新模型按「文本 + 图像 + 思考」处理，价格猜不到就按 Flash 的谷价
+						// 新模型按「文本 + 图像 + 思考」处理；云端给了 limit 就用它，否则照 Flash
 						modalities: { input: ["text", "image"] },
-						cost: /pro/i.test(entry.id) ? COST_PRO : COST_FLASH,
+						limit: {
+							context: Number.isFinite(context) && context > 0 ? context : CONTEXT_WINDOW,
+							output: Number.isFinite(output) && output > 0 ? Math.min(output, MAX_OUTPUT_TOKENS) : MAX_OUTPUT_TOKENS,
+						},
+						cost:
+							entry.cost && typeof entry.cost === "object"
+								? {
+										input: num(entry.cost.input) || COST_FLASH.input,
+										output: num(entry.cost.output) || COST_FLASH.output,
+										cache_read: num(entry.cost.cache_read ?? entry.cost.cacheRead) || COST_FLASH.cache_read,
+										cache_write: num(entry.cost.cache_write ?? entry.cost.cacheWrite) || 0,
+									}
+								: /pro/i.test(entry.id)
+									? COST_PRO
+									: COST_FLASH,
 					};
 				}
 				return list;
@@ -850,4 +904,4 @@ function formatCount(value) {
 export default baigongPlugin;
 
 /** 单测入口：不是函数，magpie 不会把它当插件调用。 */
-export const _internal = { createPkce, codeFromLocalRedirect, formFields, casFailure, dropImages, parseExpiry, decodeEnvelope, formatCount };
+export const _internal = { createPkce, codeFromLocalRedirect, formFields, casFailure, dropImages, parseExpiry, decodeEnvelope, formatCount, num };

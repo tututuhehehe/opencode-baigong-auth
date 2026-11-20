@@ -57,10 +57,10 @@ DeepSeek 上游是峰谷计价（高峰 = 谷价 ×2）。插件里 `cost` 写�
 
 要让 magpie 按峰谷算，在供应商编辑页「Rate windows」里加两条（本机时区 = 北京时间）：
 
-| 起 | 止 | 倍率 |
-|---|---|---|
-| 08:30 | 24:00 | 2 |
-| 00:00 | 00:30 | 2 |
+| 起 | 止 | 倍率 | 星期 |
+|---|---|---|---|
+| 08:30 | 23:59 | 2 | 全选 |
+| 00:00 | 00:30 | 2 | 全选 |
 
 谷时 00:30–08:30 不加窗口，就按谷价算。magpie 只在它自己认识这个字段时才计峰谷；
 插件在 `config` 里写的 `rateWindows` 会被忽略（实测），所以只能手动加一次。
@@ -77,6 +77,12 @@ magpie provider set baigong context=256k max-images=1   # 编辑页「高级」�
 `provider set` **没有** output 键（`output=` / `max-output=` / `outputs=` 都会被拒），
 最大输出只能改代码里的 `MAX_OUTPUT_TOKENS`。压缩阈值也不在这里：
 `magpie model compact <agent> <size>` 是按 agent 算的。
+
+## 测试
+
+```bash
+bun test        # 纯函数：丢图、CAS 表单解析、PKCE、解析到期时间、插件形状
+```
 
 ## 平台
 

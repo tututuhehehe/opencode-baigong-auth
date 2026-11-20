@@ -32,5 +32,8 @@
   "homepage": "https://github.com/tututuhehehe/opencode-baigong-auth#readme",
   "bugs": {
     "url": "https://github.com/tututuhehehe/opencode-baigong-auth/issues"
+  },
+  "scripts": {
+    "test": "bun test"
   }
 }
