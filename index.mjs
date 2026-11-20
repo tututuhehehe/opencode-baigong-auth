@@ -38,6 +38,9 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const CONTEXT_WINDOW = 262_144;
 const MAX_OUTPUT_TOKENS = 32_768;
 const ACCESS_FALLBACK_MS = 2 * 60 * 60_000;
+/** 静默重登的冷却：密码错了就别每个刷新周期都去打一次统一认证（会被风控/锁号）。 */
+const RELOGIN_COOLDOWN_MS = 10 * 60_000;
+let lastReloginAt = 0;
 
 // ---------------------------------------------------------------- 小工具
 
@@ -534,7 +537,7 @@ function dropImages(body, keep = IMAGES_PER_REQUEST) {
 /**
  * @param {{ magpie?: { options?: object, option?: object }, client?: any }} input
  */
-export const BaigongPlugin = async (input) => {
+async function baigongPlugin(input) {
 	const deviceName = typeof process.env.HOSTNAME === "string" ? process.env.HOSTNAME : "magpie";
 	const options = input?.magpie?.options ?? input?.magpie?.option ?? {};
 
@@ -675,6 +678,15 @@ export const BaigongPlugin = async (input) => {
 					if (typeof auth.username !== "string" || typeof auth.password !== "string") {
 						throw rejected(error);
 					}
+					const since = Date.now() - lastReloginAt;
+					if (lastReloginAt !== 0 && since < RELOGIN_COOLDOWN_MS) {
+						throw rejected(
+							new Error(
+								`${String(error?.message ?? error)}；${Math.ceil((RELOGIN_COOLDOWN_MS - since) / 60_000)} 分钟内已自动重登过，先不重试`,
+							),
+						);
+					}
+					lastReloginAt = Date.now();
 					try {
 						const again = await loginAny(auth.username, auth.password);
 						return {
@@ -794,7 +806,15 @@ export const BaigongPlugin = async (input) => {
 				if (typeof auth?.access !== "string") return list;
 				const runtime = await tryFetchRuntimeConfig(auth.access);
 				if (runtime === undefined) return list;
-				const template = list["ybg-youlaber-ds4f"];
+				// runtime 里冒出来的新模型，先照 Flash 的形状（limit / 思考 / 计价）复制一份
+				const template = list["ybg-youlaber-ds4f"] ?? {
+					limit: { context: CONTEXT_WINDOW, output: MAX_OUTPUT_TOKENS },
+					reasoning: true,
+					tool_call: true,
+					modalities: { input: ["text", "image"] },
+					cost: COST_FLASH,
+					variants: THINKING_VARIANTS,
+				};
 				for (const entry of runtime.models) {
 					if (list[entry.id] !== undefined) continue;
 					list[entry.id] = {
@@ -827,7 +847,7 @@ function formatCount(value) {
 	return String(Math.round(n));
 }
 
-export default BaigongPlugin;
+export default baigongPlugin;
 
-/** 单测入口：不导出成插件函数，magpie 只会调用 BaigongPlugin 和 default。 */
+/** 单测入口：不是函数，magpie 不会把它当插件调用。 */
 export const _internal = { createPkce, codeFromLocalRedirect, formFields, casFailure, dropImages, parseExpiry, decodeEnvelope, formatCount };

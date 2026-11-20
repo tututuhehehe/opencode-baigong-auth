@@ -4,8 +4,17 @@
   "description": "Magpie/OpenCode provider plugin: 邮百工（北邮）模型网关 —— 学号密码无头登录 + 余额查询",
   "type": "module",
   "main": "./index.mjs",
-  "files": ["index.mjs", "README.md"],
-  "keywords": ["opencode", "opencode-plugin", "baigong", "bupt"],
+  "files": [
+    "index.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "baigong",
+    "bupt"
+  ],
   "license": "MIT",
   "magpie": {
     "name": "邮百工（北邮）",
@@ -15,5 +24,13 @@
       "en": "BUPT model gateway: sign in with your student number, no browser.",
       "zh": "邮百工（北邮）模型网关：学号密码直登，不用浏览器。"
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tututuhehehe/opencode-baigong-auth.git"
+  },
+  "homepage": "https://github.com/tututuhehehe/opencode-baigong-auth#readme",
+  "bugs": {
+    "url": "https://github.com/tututuhehehe/opencode-baigong-auth/issues"
   }
 }
