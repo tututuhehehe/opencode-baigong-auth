@@ -1,6 +1,6 @@
 {
   "name": "opencode-baigong-auth",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Magpie/OpenCode provider plugin: 邮百工（北邮）模型网关 —— 学号密码无头登录 + 余额查询",
   "type": "module",
   "main": "./index.mjs",

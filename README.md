@@ -42,6 +42,8 @@ magpie quota                                # 免费体验版 · 余额 · 套�
 
 ## 模型
 
+模型名就是上游的 id（`ybg-youlaber-ds4f` / `ybg-youlaber-ds4pro`），agent 里看到的就是这两个。
+
 文本 + 图像 + 思考 + 工具调用。思考档位只有 `low / high / xhigh / max`（上游只收这四档，minimal / medium 会 400）。
 
 **图片：一次请求只收 1 张。** 上游 vLLM 的 `--limit-mm-per-prompt image=1`，多一张就直接
@@ -55,8 +57,8 @@ magpie quota                                # 免费体验版 · 余额 · 套�
 
 | 模型 | 上下文 | 输出 | 谷价（USD / 百万 token） |
 |---|---|---|---|
-| `ybg-youlaber-ds4f` 百工 Flash | 262144 | 32768 | in 0.15 · out 0.6 · cache read 0.003 |
-| `ybg-youlaber-ds4pro` 百工 Pro | 262144 | 32768 | in 0.66 · out 1.98 · cache read 0.022 |
+| `ybg-youlaber-ds4f` | 262144 | 32768 | in 0.15 · out 0.6 · cache read 0.003 |
+| `ybg-youlaber-ds4pro` | 262144 | 32768 | in 0.66 · out 1.98 · cache read 0.022 |
 
 云端 `runtime-config` 里下发的新模型会自动并进来，不用改代码。
 

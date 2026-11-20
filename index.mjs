@@ -596,7 +596,7 @@ async function baigongPlugin(input) {
 				rateWindows: PEAK_WINDOWS,
 				models: {
 					"ybg-youlaber-ds4f": {
-						name: "百工 Flash (DeepSeek V4.1 Flash)",
+						name: "ybg-youlaber-ds4f",
 						limit: { context: CONTEXT_WINDOW, output: MAX_OUTPUT_TOKENS },
 						reasoning: true,
 						tool_call: true,
@@ -606,7 +606,7 @@ async function baigongPlugin(input) {
 						variants: THINKING_VARIANTS,
 					},
 					"ybg-youlaber-ds4pro": {
-						name: "百工 Pro (DeepSeek V4 Pro)",
+						name: "ybg-youlaber-ds4pro",
 						limit: { context: CONTEXT_WINDOW, output: MAX_OUTPUT_TOKENS },
 						reasoning: true,
 						tool_call: true,
