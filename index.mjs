@@ -14,11 +14,11 @@
  *   ⑦ GET  {edugate}/local-auth/runtime-config → HKDF+AES-GCM 信封 → { apiBase, apiKey, models[] }
  * 平台自建账号走另一条：POST {edugate}/login {username, password, local_request_id}，其余步骤相同。
  *
- * 模型：纯文本 + 思考 + 工具调用，不声明图像能力；请求里夹带的图片在 fetch 层丢掉
- * （上游一次只收 1 张图，而且本模型本来就不给识图）。
+ * 模型：文本 + 图像 + 思考 + 工具调用。上游一次请求只收 1 张图，所以这一层和 magpie 的
+ * 供应商字段 max-images=1 各兜一遍：只保留最新那一张，更早的换成一行文字。
  *
- * 计价：模型 cost 写**谷价**（高峰 = 谷价 ×2），供应商级 rateWindows 声明高峰时段，
- * magpie 按调用时刻计价。magpie 不认识这个字段时它被忽略，退化成固定谷价，不影响请求。
+ * 计价：模型 cost 写**谷价**（高峰 = 谷价 ×2）。供应商级 rateWindows 里声明了高峰时段，
+ * 但实测 magpie 不采纳插件写的这个字段：要精确按峰谷算，得在编辑页手动加一次窗口。
  */
 
 import { createDecipheriv, createHash, hkdfSync, randomBytes } from "node:crypto";
@@ -26,7 +26,6 @@ import { createServer } from "node:net";
 
 const EDUGATE = "https://baigongai.cn/edugate/api";
 const CAS_URL = "https://auth.bupt.edu.cn";
-const WEB_URL = "https://baigongai.cn";
 const DEFAULT_BASE_URL = "https://gateway.baigongai.cn/v1";
 const PROVIDER = "baigong";
 const CALLBACK_PATH = "/ybg-auth/callback";
@@ -454,16 +453,20 @@ async function casLogin(username, password, onProgress, deviceName) {
 	if (token === "") throw new Error("北邮统一认证成功，但没有拿到换本机令牌所需的 token。");
 
 	onProgress?.("统一认证通过，正在换取本机令牌…");
-	const localRedirect = await completeLocalAuth({
-		requestId,
-		provider: "bupt_cas",
-		token,
-		cookie: jar.header(new URL(EDUGATE).hostname),
-	});
-	const code = codeFromLocalRedirect(localRedirect, pkce.state);
-	const tokens = await exchangeLocalAuth(code, pkce, redirectUri);
-	const runtime = await fetchRuntimeConfig(tokens.access_token, true);
-	return credentialsFrom(tokens, runtime, { loginMode: "password", loginProvider: "bupt_cas" });
+	try {
+		const localRedirect = await completeLocalAuth({
+			requestId,
+			provider: "bupt_cas",
+			token,
+			cookie: jar.header(new URL(EDUGATE).hostname),
+		});
+		const code = codeFromLocalRedirect(localRedirect, pkce.state);
+		const tokens = await exchangeLocalAuth(code, pkce, redirectUri);
+		const runtime = await fetchRuntimeConfig(tokens.access_token, true);
+		return credentialsFrom(tokens, runtime, { loginMode: "password", loginProvider: "bupt_cas" });
+	} catch (error) {
+		throw afterAuth(error);
+	}
 }
 
 /** 平台自建账号（登录页的「校园账号登录」）。 */
@@ -500,16 +503,18 @@ async function platformLogin(username, password, onProgress, deviceName) {
  * 两条路自动选：北邮统一认证优先，失败再试平台账号（两者凭据不通用）。
  * 两条都失败时，把两条的原因一起抛出来，免得只看到一半。
  */
-async function loginAny(username, password, onProgress, prefer) {
+async function loginAny(username, password, onProgress, prefer, deviceName) {
 	// 上次哪条路成功就先走哪条：平台账号不必每次先撞一次统一认证
 	const order = prefer === "platform" ? ["platform", "bupt_cas"] : ["bupt_cas", "platform"];
 	let first;
 	for (const route of order) {
 		try {
 			return route === "bupt_cas"
-				? await casLogin(username, password, onProgress)
-				: await platformLogin(username, password, onProgress);
+				? await casLogin(username, password, onProgress, deviceName)
+				: await platformLogin(username, password, onProgress, deviceName);
 		} catch (error) {
+			// 密码已经被接受了，只是后面取令牌失败：换一条路只会再交一遍密码，没有意义
+			if (error?.authenticated === true) throw error;
 			if (first === undefined) first = error;
 			else throw new Error(`${first.message}；校园账号登录也不行：${error.message}`);
 		}
@@ -638,8 +643,11 @@ async function baigongPlugin(input) {
 							method: "auto",
 							async callback(_code, { signal } = {}) {
 								try {
-									const credentials = await loginAny(username, password);
 									if (signal?.aborted) return { type: "failed", error: "登录已取消。" };
+									const credentials = await abortable(
+										loginAny(username, password, undefined, undefined, deviceName),
+										signal,
+									);
 									const identity = credentials.identity ?? {};
 									return {
 										type: "success",

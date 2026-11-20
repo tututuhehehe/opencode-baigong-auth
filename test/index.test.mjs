@@ -102,3 +102,15 @@ test("插件本体形状对：只有 default 是函数，钩子齐全", async ()
 		expect(Object.keys(model.variants)).toEqual(["low", "high", "xhigh", "max"]);
 	}
 });
+
+test("authorize 返回契约要求的形状，缺参数直接抛", async () => {
+	const hooks = await plugin({});
+	const method = hooks.auth.methods[0];
+	await expect(method.authorize({ username: "2026110076", password: "x" })).resolves.toMatchObject({
+		method: "auto",
+		url: "",
+	});
+	const started = await method.authorize({ username: "2026110076", password: "x" });
+	expect(typeof started.callback).toBe("function");
+	await expect(method.authorize({})).rejects.toThrow(/需要学号和密码/);
+});
